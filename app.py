@@ -275,3 +275,28 @@ if model_loaded:
 
 else:
     st.warning("The chatbot cannot start until its NLP model loads successfully.")
+
+
+
+from pathlib import Path
+import joblib
+import streamlit as st
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+MODEL_PATH = (
+    PROJECT_ROOT
+    / "models"
+    / "nlp"
+    / "intent_logistic_regression.pkl"
+)
+
+@st.cache_resource
+def load_model():
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"Model not found: {MODEL_PATH}"
+        )
+    return joblib.load(MODEL_PATH)
+
+intent_model = load_model()
