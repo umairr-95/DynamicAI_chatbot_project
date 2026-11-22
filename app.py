@@ -2,6 +2,9 @@
 from pathlib import Path
 from datetime import datetime
 import re
+import json
+from urllib.parse import quote
+from urllib.request import urlopen
 
 import joblib
 import pandas as pd
@@ -83,7 +86,11 @@ EMOTION_KEYWORDS = {
     "Angry": ["angry", "furious", "mad", "annoyed"],
     "Sad": ["sad", "unhappy", "disappointed", "upset"],
     "Frustrated": ["frustrated", "difficult", "problem", "irritated"],
-    "Worried": ["worried", "concerned", "anxious", "afraid"]
+    "Worried": ["worried", "concerned", "anxious", "afraid"],
+    "Loved": ["love", "loving", "adore", "beloved"],
+    "Surprised": ["surprised", "amazed", "astonished", "shocked"],
+    "Fearful": ["fear", "scared", "terrified", "panic"],
+    "Neutral": ["okay", "fine", "alright", "so so"]
 }
 
 def detect_emotion(message):
@@ -123,7 +130,7 @@ def extract_entities(message):
 
 RESPONSE_TEMPLATES = {
     "greeting": "Hello! Welcome to the Dynamic AI Chatbot. How can I help you?",
-    "weather": "I cannot check the live weather in your location yet. Please tell me the city, and I can help you look for an accurate forecast.",
+    "weather": "Please tell me the city or location you want the weather for.",
     "feeling": "I'm glad to hear that. How can I help you today?",
     "goodbye": "Goodbye! Thank you for chatting with me.",
     "thanks": "You're welcome! I'm happy to help.",
@@ -142,6 +149,30 @@ RESPONSE_TEMPLATES = {
 # 8. CHATBOT MESSAGE PROCESSING
 # --------------------------------------------------
 
+def get_live_weather(location):
+    try:
+        url = f"https://wttr.in/{quote(location)}?format=j1"
+        with urlopen(url, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+
+        current = data["current_condition"][0]
+        area = data["nearest_area"][0]["areaName"][0]["value"]
+        temperature = current["temp_C"]
+        feels_like = current["FeelsLikeC"]
+        description = current["weatherDesc"][0]["value"]
+        humidity = current["humidity"]
+
+        return (
+            f"Weather in {area}: {description}, {temperature} C "
+            f"(feels like {feels_like} C), humidity {humidity}%."
+        )
+    except Exception:
+        return (
+            f"I could not retrieve live weather for {location} right now. "
+            "Please try again in a moment."
+        )
+
+
 def process_message(message, threshold=0.45):
     clean_message = preprocess_text(message)
 
@@ -159,6 +190,32 @@ def process_message(message, threshold=0.45):
         r"\b(?:weather|forecast|temperature|climate|raining|rainy|sunny|snowing)\b",
         clean_message
     )
+    pending_weather = (
+        st.session_state.get("pending_weather", False)
+        if hasattr(st, "session_state")
+        else False
+    )
+    weather_handled = False
+
+    if pending_weather:
+        location = re.sub(
+            r"^(?:in|at|for|of|the|my)\s+",
+            "",
+            clean_message,
+            flags=re.I
+        )
+        intent = "weather"
+        confidence = 1.0
+        response = get_live_weather(location.title())
+        st.session_state.pending_weather = False
+        weather_handled = True
+    elif weather_match:
+        intent = "weather"
+        confidence = 1.0
+        response = RESPONSE_TEMPLATES["weather"]
+        st.session_state.pending_weather = True
+        weather_handled = True
+
     happy_match = (
         re.search(r"\bhappy\b", clean_message)
         and not re.search(r"\b(?:not|unhappy|sad)\s+(?:very\s+)?happy\b", clean_message)
@@ -167,20 +224,42 @@ def process_message(message, threshold=0.45):
         r"\b(?:hello|hi|hey|hiya|greetings|good morning|good afternoon|good evening)\b",
         clean_message
     )
+    capability_match = re.search(
+        r"\b(?:all emotions|any emotion|whatever|anything|everything|answer me|you should have answer|capabilities)\b",
+        clean_message
+    )
+    message_emotion = detect_emotion(message)
 
-    if weather_match:
-        intent = "weather"
-        confidence = 1.0
-        response = RESPONSE_TEMPLATES["weather"]
-    elif happy_match:
+    if not weather_handled and happy_match:
         intent = "feeling"
         confidence = 1.0
         response = RESPONSE_TEMPLATES["feeling"]
-    elif greeting_match:
+    elif not weather_handled and greeting_match:
         intent = "greeting"
         confidence = 1.0
         response = RESPONSE_TEMPLATES["greeting"]
-    else:
+    elif not weather_handled and capability_match:
+        intent = "help"
+        confidence = 1.0
+        response = (
+            "I can help with greetings, weather, emotions, support, complaints, "
+            "feedback, business hours, and general questions. Tell me what you need."
+        )
+    elif not weather_handled and message_emotion != "Neutral":
+        intent = "emotion_response"
+        confidence = 1.0
+        emotion_responses = {
+            "Happy": "I'm glad to hear that. How can I help you today?",
+            "Angry": "I understand this is upsetting. Please tell me what happened.",
+            "Sad": "I'm sorry you're feeling sad. Would you like to share what is bothering you?",
+            "Frustrated": "I understand this is frustrating. Please describe the problem clearly.",
+            "Worried": "I understand your concern. Tell me what worries you.",
+            "Loved": "It's good to hear about that. I'm here to help.",
+            "Surprised": "That does sound surprising. Would you like to talk about it?",
+            "Fearful": "I understand. Please tell me what is making you feel afraid."
+        }
+        response = emotion_responses[message_emotion]
+    elif not weather_handled:
         probabilities = intent_model.predict_proba([clean_message])[0]
         predicted_index = probabilities.argmax()
 
@@ -189,8 +268,9 @@ def process_message(message, threshold=0.45):
 
         if confidence < threshold:
             response = (
-                "I'm not completely sure I understood. "
-                "Could you please rephrase your question?"
+                f"I understand you asked about '{message.strip()}'. "
+                "I may not have an exact trained response yet, but tell me a little "
+                "more and I will do my best to help."
             )
             intent = "fallback"
         else:
@@ -227,6 +307,9 @@ if model_loaded:
 
     if "interaction_log" not in st.session_state:
         st.session_state.interaction_log = []
+
+    if "pending_weather" not in st.session_state:
+        st.session_state.pending_weather = False
 
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):
