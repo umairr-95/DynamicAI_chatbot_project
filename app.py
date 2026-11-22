@@ -148,9 +148,43 @@ RESPONSE_TEMPLATES = {
     "request_human": "You would like to speak with a human representative. This demo cannot transfer you to a live agent."
 }
 
+DEMO_INTENT_PATTERNS = [
+    ("greeting", r"\b(?:hello|hi|hey|hiya|greetings|good morning|good afternoon|good evening)\b"),
+    ("goodbye", r"\b(?:bye|goodbye|farewell|see you|take care)\b"),
+    ("thanks", r"\b(?:thank you|thanks|appreciate|grateful)\b"),
+    ("bot_identity", r"\b(?:who are you|what are you|are you an? (?:ai|chatbot|bot)|your identity)\b"),
+    ("faq_hours", r"\b(?:hours|open|close|available today|business hours)\b"),
+    ("faq_services", r"\b(?:services?|products?|offerings|what do you provide)\b"),
+    ("request_human", r"\b(?:human|real person|agent|representative)\b"),
+    ("request_support", r"\b(?:support|not working|cannot log in|can't log in|issue|problem)\b"),
+    ("complaint", r"\b(?:complaint|complain|unacceptable|dissatisfied|disappointing|bad experience)\b"),
+    ("positive_feedback", r"\b(?:excellent|great job|great service|wonderful experience|very useful)\b"),
+    ("negative_feedback", r"\b(?:terrible|poor service|not helpful|unhappy|not satisfied)\b"),
+    ("help", r"\b(?:what can you do|help|guide me|how does this work|your features)\b"),
+    ("feeling", r"\b(?:happy|excited|glad|wonderful)\b"),
+]
+
+DEMO_FALLBACK_RESPONSE = (
+    "This free demo has sample replies for greetings, FAQs, support, feedback, "
+    "and weather. Add an OpenAI API key in the sidebar for open-ended AI answers."
+)
+
 # --------------------------------------------------
 # 8. CHATBOT MESSAGE PROCESSING
 # --------------------------------------------------
+
+def get_openai_api_key():
+    api_key = (
+        os.environ.get("OPENAI_API_KEY")
+        or st.session_state.get("openai_api_key_input")
+    )
+    if not api_key:
+        try:
+            api_key = st.secrets["OPENAI_API_KEY"]
+        except (KeyError, StreamlitSecretNotFoundError):
+            api_key = None
+    return api_key
+
 
 def get_live_weather(location):
     try:
@@ -177,17 +211,12 @@ def get_live_weather(location):
 
 
 def generate_ai_response(conversation_history):
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        try:
-            api_key = st.secrets["OPENAI_API_KEY"]
-        except (KeyError, StreamlitSecretNotFoundError):
-            api_key = None
-
+    api_key = get_openai_api_key()
     if not api_key:
         raise RuntimeError(
-            "AI responses are not configured. Set OPENAI_API_KEY as an environment "
-            "variable or add it to .streamlit/secrets.toml, then restart the app."
+            "Enter your OpenAI API key in the sidebar to enable AI-generated answers. "
+            "You can also configure OPENAI_API_KEY as an environment variable or "
+            "in .streamlit/secrets.toml."
         )
 
     messages = [
@@ -291,17 +320,27 @@ def process_message(message, conversation_history=None):
         weather_handled = True
 
     if not weather_handled:
-        if clean_message:
-            probabilities = intent_model.predict_proba([clean_message])[0]
-            predicted_index = probabilities.argmax()
-            intent = str(intent_model.classes_[predicted_index])
-            confidence = float(probabilities[predicted_index])
+        api_key = get_openai_api_key()
+        if api_key:
+            if clean_message:
+                probabilities = intent_model.predict_proba([clean_message])[0]
+                predicted_index = probabilities.argmax()
+                intent = str(intent_model.classes_[predicted_index])
+                confidence = float(probabilities[predicted_index])
+            else:
+                intent = "general_question"
+                confidence = 0.0
+            response = generate_ai_response(
+                conversation_history or [{"role": "user", "content": message}]
+            )
         else:
-            intent = "general_question"
-            confidence = 0.0
-        response = generate_ai_response(
-            conversation_history or [{"role": "user", "content": message}]
-        )
+            intent, response = "offline_demo", DEMO_FALLBACK_RESPONSE
+            for demo_intent, pattern in DEMO_INTENT_PATTERNS:
+                if re.search(pattern, clean_message):
+                    intent = demo_intent
+                    response = RESPONSE_TEMPLATES[demo_intent]
+                    break
+            confidence = 1.0 if intent != "offline_demo" else 0.0
 
     sentiment, sentiment_score = analyze_sentiment(message)
     emotion = detect_emotion(message)
@@ -334,6 +373,23 @@ if model_loaded:
 
     if "pending_weather" not in st.session_state:
         st.session_state.pending_weather = False
+
+    with st.sidebar:
+        st.subheader("AI configuration")
+        st.text_input(
+            "OpenAI API key",
+            type="password",
+            key="openai_api_key_input",
+            help="Used to generate replies. Do not share your key in chat."
+        )
+        if get_openai_api_key():
+            st.caption("AI replies are enabled. Chat messages are sent to OpenAI.")
+        else:
+            st.info("Free offline demo mode is active; try the sample prompts below.")
+            st.caption(
+                "Try: Hello, What can you do?, What are your services?, "
+                "What time do you open?, I need support, Thank you, Goodbye."
+            )
 
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):
