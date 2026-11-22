@@ -3,12 +3,15 @@ from pathlib import Path
 from datetime import datetime
 import re
 import json
+import os
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import joblib
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --------------------------------------------------
@@ -22,7 +25,7 @@ st.set_page_config(
 )
 
 st.title("🤖 Dynamic AI Chatbot")
-st.caption("An NLP-powered conversational chatbot")
+st.caption("AI-powered chat using OpenAI. Your messages are sent to OpenAI to generate responses.")
 
 # --------------------------------------------------
 # 2. PROJECT PATHS AND MODEL LOADING
@@ -173,10 +176,81 @@ def get_live_weather(location):
         )
 
 
-def process_message(message, threshold=0.45):
+def generate_ai_response(conversation_history):
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        try:
+            api_key = st.secrets["OPENAI_API_KEY"]
+        except (KeyError, StreamlitSecretNotFoundError):
+            api_key = None
+
+    if not api_key:
+        raise RuntimeError(
+            "AI responses are not configured. Set OPENAI_API_KEY as an environment "
+            "variable or add it to .streamlit/secrets.toml, then restart the app."
+        )
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a helpful, conversational assistant. Answer the user's "
+                "question directly, use the conversation context, and be clear "
+                "when you are uncertain or cannot verify current information."
+            )
+        }
+    ]
+    messages.extend(
+        {"role": item["role"], "content": item["content"]}
+        for item in conversation_history[-20:]
+        if item.get("role") in {"user", "assistant"}
+        and isinstance(item.get("content"), str)
+    )
+
+    request = Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps({
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "messages": messages,
+            "temperature": 0.7
+        }).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        },
+        method="POST"
+    )
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as error:
+        raise RuntimeError(
+            f"OpenAI API request failed with HTTP {error.code}."
+        ) from error
+    except URLError as error:
+        raise RuntimeError(
+            f"Could not reach the OpenAI API: {error.reason}"
+        ) from error
+    except TimeoutError as error:
+        raise RuntimeError("The OpenAI API request timed out. Please try again.") from error
+    except json.JSONDecodeError as error:
+        raise RuntimeError("The OpenAI API returned invalid JSON.") from error
+
+    try:
+        answer = result["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError) as error:
+        raise RuntimeError("The OpenAI API returned an invalid response.") from error
+
+    if not answer:
+        raise RuntimeError("The AI returned an empty response. Please try again.")
+    return answer
+
+
+def process_message(message, conversation_history=None):
     clean_message = preprocess_text(message)
 
-    if not clean_message:
+    if not message.strip():
         return {
             "response": "Please enter a message containing some text.",
             "intent": "empty_message",
@@ -216,74 +290,24 @@ def process_message(message, threshold=0.45):
         st.session_state.pending_weather = True
         weather_handled = True
 
-    happy_match = (
-        re.search(r"\bhappy\b", clean_message)
-        and not re.search(r"\b(?:not|unhappy|sad)\s+(?:very\s+)?happy\b", clean_message)
-    )
-    greeting_match = re.search(
-        r"\b(?:hello|hi|hey|hiya|greetings|good morning|good afternoon|good evening)\b",
-        clean_message
-    )
-    capability_match = re.search(
-        r"\b(?:all emotions|any emotion|whatever|anything|everything|answer me|you should have answer|capabilities)\b",
-        clean_message
-    )
-    message_emotion = detect_emotion(message)
-
-    if not weather_handled and happy_match:
-        intent = "feeling"
-        confidence = 1.0
-        response = RESPONSE_TEMPLATES["feeling"]
-    elif not weather_handled and greeting_match:
-        intent = "greeting"
-        confidence = 1.0
-        response = RESPONSE_TEMPLATES["greeting"]
-    elif not weather_handled and capability_match:
-        intent = "help"
-        confidence = 1.0
-        response = (
-            "I can help with greetings, weather, emotions, support, complaints, "
-            "feedback, business hours, and general questions. Tell me what you need."
-        )
-    elif not weather_handled and message_emotion != "Neutral":
-        intent = "emotion_response"
-        confidence = 1.0
-        emotion_responses = {
-            "Happy": "I'm glad to hear that. How can I help you today?",
-            "Angry": "I understand this is upsetting. Please tell me what happened.",
-            "Sad": "I'm sorry you're feeling sad. Would you like to share what is bothering you?",
-            "Frustrated": "I understand this is frustrating. Please describe the problem clearly.",
-            "Worried": "I understand your concern. Tell me what worries you.",
-            "Loved": "It's good to hear about that. I'm here to help.",
-            "Surprised": "That does sound surprising. Would you like to talk about it?",
-            "Fearful": "I understand. Please tell me what is making you feel afraid."
-        }
-        response = emotion_responses[message_emotion]
-    elif not weather_handled:
-        probabilities = intent_model.predict_proba([clean_message])[0]
-        predicted_index = probabilities.argmax()
-
-        intent = str(intent_model.classes_[predicted_index])
-        confidence = float(probabilities[predicted_index])
-
-        if confidence < threshold:
-            response = (
-                f"I understand you asked about '{message.strip()}'. "
-                "I may not have an exact trained response yet, but tell me a little "
-                "more and I will do my best to help."
-            )
-            intent = "fallback"
+    if not weather_handled:
+        if clean_message:
+            probabilities = intent_model.predict_proba([clean_message])[0]
+            predicted_index = probabilities.argmax()
+            intent = str(intent_model.classes_[predicted_index])
+            confidence = float(probabilities[predicted_index])
         else:
-            response = RESPONSE_TEMPLATES.get(
-                intent,
-                "I understand your message, but I don't have a response for it yet."
-            )
+            intent = "general_question"
+            confidence = 0.0
+        response = generate_ai_response(
+            conversation_history or [{"role": "user", "content": message}]
+        )
 
     sentiment, sentiment_score = analyze_sentiment(message)
     emotion = detect_emotion(message)
     entities = extract_entities(message)
 
-    if emotion in ["Angry", "Sad", "Frustrated", "Worried"]:
+    if weather_handled and emotion in ["Angry", "Sad", "Frustrated", "Worried"]:
         response = "I understand your concern. " + response
 
     return {
@@ -330,33 +354,40 @@ if model_loaded:
         with st.chat_message("user"):
             st.markdown(user_message)
 
-        result = process_message(user_message)
+        try:
+            result = process_message(
+                user_message,
+                conversation_history=st.session_state.messages
+            )
+        except RuntimeError as error:
+            st.session_state.messages.pop()
+            st.error(str(error))
+        else:
+            details = {
+                "Intent": result["intent"],
+                "Confidence": round(result["confidence"], 3),
+                "Sentiment": result["sentiment"],
+                "Emotion": result["emotion"],
+                "Entities": result["entities"]
+            }
 
-        details = {
-            "Intent": result["intent"],
-            "Confidence": round(result["confidence"], 3),
-            "Sentiment": result["sentiment"],
-            "Emotion": result["emotion"],
-            "Entities": result["entities"]
-        }
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result["response"],
+                "details": details
+            })
 
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": result["response"],
-            "details": details
-        })
+            st.session_state.interaction_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "message": user_message,
+                "response": result["response"],
+                "intent": result["intent"],
+                "confidence": result["confidence"],
+                "sentiment": result["sentiment"],
+                "emotion": result["emotion"]
+            })
 
-        st.session_state.interaction_log.append({
-            "timestamp": datetime.now().isoformat(),
-            "message": user_message,
-            "response": result["response"],
-            "intent": result["intent"],
-            "confidence": result["confidence"],
-            "sentiment": result["sentiment"],
-            "emotion": result["emotion"]
-        })
-
-        st.rerun()
+            st.rerun()
 
     if st.button("Clear conversation"):
         st.session_state.messages = []
