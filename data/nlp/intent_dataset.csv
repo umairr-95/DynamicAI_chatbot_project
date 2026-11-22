@@ -1,0 +1,181 @@
+text,intent
+Have a nice day,goodbye
+Thank you so much,thanks
+I am frustrated,negative_feedback
+What time do you close?,faq_hours
+That was very useful,positive_feedback
+Goodbye,goodbye
+I have to go,goodbye
+Please explain your features,help
+I need help with my account,request_support
+Please resolve my issue,request_support
+What products do you provide?,faq_services
+That did not solve anything,negative_feedback
+Help me get started,help
+Very impressive service,positive_feedback
+Who are you?,bot_identity
+Bye,goodbye
+Are you an AI assistant?,bot_identity
+Your service did not meet my expectations,complaint
+What are your main offerings?,faq_services
+What are you?,bot_identity
+Give me a list of your services,faq_services
+I want to make a complaint,complaint
+You did a great job,positive_feedback
+Thank you,thanks
+Greetings,greeting
+I want to talk to an employee,request_human
+I need help,help
+Talk to you soon,goodbye
+I appreciate the quality,positive_feedback
+Can a person assist me?,request_human
+Please help me fix this issue,request_support
+Can you introduce yourself?,bot_identity
+The support was excellent,positive_feedback
+I am dissatisfied,complaint
+Can you guide me?,help
+Farewell,goodbye
+I am unable to continue,request_support
+How does this work?,help
+I am confused,help
+Thanks a lot,thanks
+How is your day?,greeting
+Appreciate it,thanks
+I want to report a problem,complaint
+Tell me what you provide,faq_services
+The experience was terrible,negative_feedback
+I want to report bad service,complaint
+What services do you offer?,faq_services
+I am grateful,thanks
+I need to speak with a representative,request_human
+I need assistance with a service,request_support
+Please connect me to support staff,request_human
+This is disappointing,negative_feedback
+Hey,greeting
+Transfer this conversation to a person,request_human
+What is your name?,bot_identity
+When does customer service start?,faq_hours
+This is not helpful,negative_feedback
+Do you work on weekends?,faq_hours
+The experience was smooth,positive_feedback
+End this conversation,goodbye
+I did not get the help I needed,negative_feedback
+Do you provide customer support?,faq_services
+My application is not working,request_support
+When are you available?,faq_hours
+You helped me,thanks
+I do not find this useful,negative_feedback
+That is all for now,goodbye
+I need details about your offerings,faq_services
+What are your working hours?,faq_hours
+Excellent work,positive_feedback
+I want to say hello,greeting
+Hello chatbot,greeting
+Take care,goodbye
+I cannot log in,request_support
+Good afternoon,greeting
+That was helpful,thanks
+Which services are available?,faq_services
+I want to raise a complaint,complaint
+I want to know your available services,faq_services
+Is anyone there?,greeting
+There is an error on my screen,request_support
+This experience was frustrating,complaint
+Hello,greeting
+I am very happy with the experience,positive_feedback
+What services can you provide?,help
+I need some assistance,help
+Thanks for your support,thanks
+I had a bad experience,complaint
+Until next time,goodbye
+That solved my problem,thanks
+Everything worked perfectly,positive_feedback
+I really like this service,positive_feedback
+"Thanks, bye",goodbye
+See you tomorrow,goodbye
+I am satisfied with the help,positive_feedback
+When can I contact support?,faq_hours
+Are you available today?,faq_hours
+What are your operating hours?,faq_hours
+Thanks for explaining,thanks
+I need technical support,request_support
+Can I contact you at night?,faq_hours
+This is unacceptable,complaint
+I need a live agent,request_human
+Connect me with an agent,request_human
+Are you a chatbot?,bot_identity
+Can you explain your services?,faq_services
+That was a great response,positive_feedback
+Transfer me to customer service,request_human
+Can you help me?,help
+Tell me how to proceed,help
+I appreciate your help,thanks
+This was useful,thanks
+Your service is excellent,positive_feedback
+I had a wonderful experience,positive_feedback
+What can you do?,help
+Connect me with a customer care executive,request_human
+I need customer support,request_support
+This service is disappointing,complaint
+I have a technical problem,request_support
+What type of assistant are you?,bot_identity
+Good evening,greeting
+I am dissatisfied with the answer,negative_feedback
+Good morning,greeting
+Can I talk to a real person?,request_human
+Tell me about yourself,bot_identity
+Thanks for the information,thanks
+Tell me your business hours,faq_hours
+What time do you open?,faq_hours
+Many thanks,thanks
+"Hi, how are you?",greeting
+I am facing a problem,request_support
+Tell me about your services,faq_services
+Are you open on Sunday?,faq_hours
+Your answer makes no sense,negative_feedback
+This is frustrating,negative_feedback
+Tell me the support timings,faq_hours
+Hey there,greeting
+"Hi, can you help me?",greeting
+Tell me your identity,bot_identity
+The answer was incorrect,negative_feedback
+The service quality is poor,complaint
+See you later,goodbye
+Can you assist me?,help
+I expected a better response,negative_feedback
+I am disappointed with the support,complaint
+I am not happy,negative_feedback
+I want to speak to a human,request_human
+Show me how to use this chatbot,help
+Are you a virtual assistant?,bot_identity
+I cannot access my account,request_support
+Are you a human?,bot_identity
+I do not want to talk to a bot,request_human
+Are you a real person?,bot_identity
+What can I call you?,bot_identity
+Are you available in the evening?,faq_hours
+Catch you later,goodbye
+Do you use artificial intelligence?,bot_identity
+Let me speak to your manager,request_human
+I am not satisfied with the response,complaint
+"Great, thank you",thanks
+I am unhappy with this experience,negative_feedback
+Is there a human available?,request_human
+Hi there,greeting
+Who created you?,bot_identity
+I am pleased with the service,positive_feedback
+I have a serious concern,complaint
+That was a poor response,negative_feedback
+What does your company do?,faq_services
+What facilities are available?,faq_services
+Can someone troubleshoot this?,request_support
+What time does your service end?,faq_hours
+I need some information,help
+I am unhappy with your service,complaint
+I need human assistance,request_human
+I am leaving now,goodbye
+I need guidance,help
+Something is not working,request_support
+"Hello, are you available?",greeting
+What can I get from your company?,faq_services
+Can you describe your products?,faq_services
