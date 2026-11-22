@@ -123,6 +123,8 @@ def extract_entities(message):
 
 RESPONSE_TEMPLATES = {
     "greeting": "Hello! Welcome to the Dynamic AI Chatbot. How can I help you?",
+    "weather": "I cannot check the live weather in your location yet. Please tell me the city, and I can help you look for an accurate forecast.",
+    "feeling": "I'm glad to hear that. How can I help you today?",
     "goodbye": "Goodbye! Thank you for chatting with me.",
     "thanks": "You're welcome! I'm happy to help.",
     "bot_identity": "I am a Python-based AI chatbot that uses NLP intent recognition.",
@@ -153,23 +155,49 @@ def process_message(message, threshold=0.45):
             "entities": {}
         }
 
-    probabilities = intent_model.predict_proba([clean_message])[0]
-    predicted_index = probabilities.argmax()
+    weather_match = re.search(
+        r"\b(?:weather|forecast|temperature|climate|raining|rainy|sunny|snowing)\b",
+        clean_message
+    )
+    happy_match = (
+        re.search(r"\bhappy\b", clean_message)
+        and not re.search(r"\b(?:not|unhappy|sad)\s+(?:very\s+)?happy\b", clean_message)
+    )
+    greeting_match = re.search(
+        r"\b(?:hello|hi|hey|hiya|greetings|good morning|good afternoon|good evening)\b",
+        clean_message
+    )
 
-    intent = str(intent_model.classes_[predicted_index])
-    confidence = float(probabilities[predicted_index])
-
-    if confidence < threshold:
-        response = (
-            "I'm not completely sure I understood. "
-            "Could you please rephrase your question?"
-        )
-        intent = "fallback"
+    if weather_match:
+        intent = "weather"
+        confidence = 1.0
+        response = RESPONSE_TEMPLATES["weather"]
+    elif happy_match:
+        intent = "feeling"
+        confidence = 1.0
+        response = RESPONSE_TEMPLATES["feeling"]
+    elif greeting_match:
+        intent = "greeting"
+        confidence = 1.0
+        response = RESPONSE_TEMPLATES["greeting"]
     else:
-        response = RESPONSE_TEMPLATES.get(
-            intent,
-            "I understand your message, but I don't have a response for it yet."
-        )
+        probabilities = intent_model.predict_proba([clean_message])[0]
+        predicted_index = probabilities.argmax()
+
+        intent = str(intent_model.classes_[predicted_index])
+        confidence = float(probabilities[predicted_index])
+
+        if confidence < threshold:
+            response = (
+                "I'm not completely sure I understood. "
+                "Could you please rephrase your question?"
+            )
+            intent = "fallback"
+        else:
+            response = RESPONSE_TEMPLATES.get(
+                intent,
+                "I understand your message, but I don't have a response for it yet."
+            )
 
     sentiment, sentiment_score = analyze_sentiment(message)
     emotion = detect_emotion(message)
