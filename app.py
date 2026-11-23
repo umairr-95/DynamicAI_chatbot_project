@@ -175,6 +175,29 @@ def get_live_weather(location):
         )
 
 
+def get_local_model_status():
+    model = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+    try:
+        with urlopen("http://127.0.0.1:11434/api/tags", timeout=2) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError:
+        return False, "Ollama is not responding"
+    except URLError:
+        return False, "Ollama is not running"
+    except TimeoutError:
+        return False, "Ollama status check timed out"
+    except json.JSONDecodeError:
+        return False, "Ollama returned invalid status"
+
+    models = result.get("models", []) if isinstance(result, dict) else []
+    if any(
+        isinstance(item, dict) and item.get("name") == model
+        for item in models
+    ):
+        return True, f"Ready · {model}"
+    return False, f"Model not found · {model}"
+
+
 def generate_local_response(conversation_history):
     messages = [
         {
@@ -342,12 +365,18 @@ if model_loaded:
 
     with st.sidebar:
         st.subheader("Workspace")
-        st.badge("Local AI", icon=":material/computer:", color="green")
+        model_ready, model_status = get_local_model_status()
+        st.badge(
+            model_status,
+            icon=":material/computer:",
+            color="green" if model_ready else "orange"
+        )
         st.caption("Chat replies run through Ollama on this computer.")
-        with st.expander("Set up local AI", icon=":material/settings:"):
-            st.markdown("[Install Ollama](https://ollama.com/download)")
-            st.caption("Download the model once from PowerShell:")
-            st.code("ollama pull qwen2.5:3b", language="powershell")
+        if not model_ready:
+            with st.expander("Set up local AI", icon=":material/settings:"):
+                st.markdown("[Install Ollama](https://ollama.com/download)")
+                st.caption("Download the model once from PowerShell:")
+                st.code("ollama pull qwen2.5:3b", language="powershell")
         st.caption("Weather and image search links need internet access.")
         if st.button(
             "Clear conversation",
@@ -427,7 +456,8 @@ if model_loaded:
                 st.bar_chart(
                     intent_counts,
                     horizontal=True,
-                    alt="Conversation exchanges by detected intent"
+                    x_label="Intent",
+                    y_label="Exchanges"
                 )
                 st.caption(
                     f"Latest sentiment: {interaction_log[-1]['sentiment']} · "
@@ -454,51 +484,48 @@ if model_loaded:
             "content": user_message
         })
 
-        with st.chat_message("user"):
-            st.markdown(user_message)
+        with st.spinner("Local model is thinking..."):
+            try:
+                result = process_message(
+                    user_message,
+                    conversation_history=st.session_state.messages
+                )
+            except RuntimeError as error:
+                st.session_state.messages.pop()
+                st.error(str(error))
+            else:
+                details = {
+                    "Intent": result["intent"],
+                    "Confidence": round(result["confidence"], 3),
+                    "Sentiment": result["sentiment"],
+                    "Emotion": result["emotion"],
+                    "Entities": result["entities"]
+                }
 
-        try:
-            result = process_message(
-                user_message,
-                conversation_history=st.session_state.messages
-            )
-        except RuntimeError as error:
-            st.session_state.messages.pop()
-            st.error(str(error))
-        else:
-            details = {
-                "Intent": result["intent"],
-                "Confidence": round(result["confidence"], 3),
-                "Sentiment": result["sentiment"],
-                "Emotion": result["emotion"],
-                "Entities": result["entities"]
-            }
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": result["response"],
+                    "details": details
+                })
 
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": result["response"],
-                "details": details
-            })
+                st.session_state.interaction_log.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "message": user_message,
+                    "response": result["response"],
+                    "intent": result["intent"],
+                    "confidence": result["confidence"],
+                    "sentiment": result["sentiment"],
+                    "emotion": result["emotion"]
+                })
 
-            st.session_state.interaction_log.append({
-                "timestamp": datetime.now().isoformat(),
-                "message": user_message,
-                "response": result["response"],
-                "intent": result["intent"],
-                "confidence": result["confidence"],
-                "sentiment": result["sentiment"],
-                "emotion": result["emotion"]
-            })
-
-            st.rerun()
+                st.rerun()
 
     with st.expander("Session report", icon=":material/table_chart:"):
         if interaction_log:
             analytics_df = pd.DataFrame(interaction_log)
             st.dataframe(
                 analytics_df,
-                hide_index=True,
-                alt="Current session conversation analytics"
+                hide_index=True
             )
 
             csv_data = analytics_df.to_csv(index=False).encode("utf-8")
