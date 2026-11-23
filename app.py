@@ -194,21 +194,19 @@ def get_local_model_status():
         if start_error:
             return False, start_error
 
-        deadline = time.monotonic() + 10
-        while True:
-            try:
-                result = fetch_models()
-                break
-            except HTTPError:
-                return False, "Ollama is not responding"
-            except URLError:
-                if time.monotonic() >= deadline:
-                    return False, "Ollama did not start · Run `ollama serve` and retry"
-                time.sleep(0.5)
-            except TimeoutError:
-                return False, "Ollama status check timed out"
-            except json.JSONDecodeError:
-                return False, "Ollama returned invalid status"
+        start_error = wait_for_local_ollama_server()
+        if start_error:
+            return False, start_error
+        try:
+            result = fetch_models()
+        except HTTPError:
+            return False, "Ollama is not responding"
+        except URLError:
+            return False, "Ollama did not start · Run `ollama serve` and retry"
+        except TimeoutError:
+            return False, "Ollama status check timed out"
+        except json.JSONDecodeError:
+            return False, "Ollama returned invalid status"
     except TimeoutError:
         return False, "Ollama status check timed out"
     except json.JSONDecodeError:
@@ -267,6 +265,32 @@ def start_local_ollama_server():
     return None
 
 
+def wait_for_local_ollama_server():
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            with urlopen(f"{OLLAMA_API_URL}/api/tags", timeout=2):
+                return None
+        except HTTPError:
+            return "Ollama is not responding"
+        except URLError:
+            if time.monotonic() >= deadline:
+                process_holder = get_ollama_process_holder()
+                process = process_holder["process"]
+                if process is not None and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=2)
+                process_holder["process"] = None
+                return "Ollama did not start · Run `ollama serve` and retry"
+            time.sleep(0.5)
+        except TimeoutError:
+            return "Ollama status check timed out"
+
+
 def generate_local_response(conversation_history):
     messages = [
         {
@@ -298,19 +322,42 @@ def generate_local_response(conversation_history):
         method="POST"
     )
 
-    try:
+    def send_request():
         with urlopen(request, timeout=180) as response:
-            result = json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
+
+    try:
+        result = send_request()
     except HTTPError as error:
         raise RuntimeError(
             f"Local Ollama returned HTTP {error.code}. Make sure the model "
             f"'{OLLAMA_MODEL}' is installed by running `ollama pull {OLLAMA_MODEL}`."
         ) from error
     except URLError as error:
-        raise RuntimeError(
-            "Could not reach Ollama on this computer. Install and start Ollama, "
-            f"then download the model with `ollama pull {OLLAMA_MODEL}`."
-        ) from error
+        start_error = start_local_ollama_server()
+        if not start_error:
+            start_error = wait_for_local_ollama_server()
+        if start_error:
+            raise RuntimeError(start_error) from error
+
+        try:
+            result = send_request()
+        except HTTPError as retry_error:
+            raise RuntimeError(
+                f"Local Ollama returned HTTP {retry_error.code}. Make sure the "
+                f"model '{OLLAMA_MODEL}' is installed by running "
+                f"`ollama pull {OLLAMA_MODEL}`."
+            ) from retry_error
+        except URLError as retry_error:
+            raise RuntimeError(
+                "Could not reach Ollama after attempting to start its local server."
+            ) from retry_error
+        except TimeoutError as retry_error:
+            raise RuntimeError(
+                "The local model took too long to respond. Try again or use a smaller model."
+            ) from retry_error
+        except json.JSONDecodeError as retry_error:
+            raise RuntimeError("Ollama returned invalid JSON.") from retry_error
     except TimeoutError as error:
         raise RuntimeError(
             "The local model took too long to respond. Try again or use a smaller model."
