@@ -486,11 +486,18 @@ if model_loaded:
             icon=":material/computer:",
             color="green" if model_ready else "orange"
         )
-        st.caption("Chat replies run through Ollama on this computer.")
+        st.caption(
+            "Chat uses Ollama on the app's computer. Streamlit Cloud cannot "
+            "reach Ollama running on your PC."
+        )
         if not model_ready:
-            with st.expander("Set up local AI", icon=":material/settings:"):
+            st.info(
+                "Chat is disabled until the configured Ollama model is reachable. "
+                "Cloud chat needs a hosted model backend."
+            )
+            with st.expander("Set up local Ollama", icon=":material/settings:"):
                 st.markdown("[Install Ollama](https://ollama.com/download)")
-                st.caption("Download the model once from PowerShell:")
+                st.caption("On the computer running this app, download the model:")
                 st.code(f"ollama pull {OLLAMA_MODEL}", language="powershell")
         st.caption("Weather and image search links need internet access.")
         if st.button(
@@ -549,20 +556,27 @@ if model_loaded:
                             ):
                                 st.write(item["details"])
             else:
-                st.info(
-                    "Start with a question or choose a suggested prompt.",
-                    icon=":material/waving_hand:"
-                )
-                selected_prompt = st.pills(
-                    "Try asking",
-                    [
-                        "How does local AI work?",
-                        "What can you help me with?",
-                        "Tell me a fun fact"
-                    ],
-                    label_visibility="collapsed",
-                    key="starter_prompts"
-                )
+                if model_ready:
+                    st.info(
+                        "Start with a question or choose a suggested prompt.",
+                        icon=":material/waving_hand:"
+                    )
+                    selected_prompt = st.pills(
+                        "Try asking",
+                        [
+                            "How does local AI work?",
+                            "What can you help me with?",
+                            "Tell me a fun fact"
+                        ],
+                        label_visibility="collapsed",
+                        key="starter_prompts"
+                    )
+                else:
+                    st.info(
+                        "The conversation UI is available, but chat is disabled "
+                        "until a model backend is configured.",
+                        icon=":material/info:"
+                    )
 
     with insights_column:
         with st.container(border=True):
@@ -589,11 +603,11 @@ if model_loaded:
             )
             st.caption("Live weather and image browsing use internet services.")
 
-    user_message = st.chat_input("Ask anything...")
-    if selected_prompt:
+    user_message = st.chat_input("Ask anything...", disabled=not model_ready)
+    if model_ready and selected_prompt:
         user_message = selected_prompt
 
-    if user_message:
+    if model_ready and user_message:
         st.session_state.messages.append({
             "role": "user",
             "content": user_message

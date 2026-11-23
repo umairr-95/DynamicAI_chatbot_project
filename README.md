@@ -92,6 +92,28 @@ python -m spacy download en_core_web_sm
 
 ## 7. Running the Chatbot
 
+### Streamlit app
+
+The Streamlit interface is in `app.py`. Install `requirements.txt`, then run:
+
+```powershell
+streamlit run app.py
+```
+
+Chat replies use the configured Ollama model (default: `qwen2.5:3b`) on the
+computer running the app. The NLP model required by the interface is tracked at
+`models/nlp/intent_logistic_regression.pkl`.
+
+### Streamlit Community Cloud
+
+Deploy the repository's `main` branch with `app.py` as the entry point.
+Community Cloud runs remotely and cannot access Ollama on your PC. The interface
+will load, but chat stays disabled until a hosted model backend is configured.
+Do not commit API keys; add them through the app's Streamlit Secrets settings
+when a hosted backend is selected.
+
+### Notebook
+
 1. Open the project in VS Code.
 2. Select the project's Python environment or Jupyter kernel.
 3. Open `Notebooks/11_Final_Interactive_Chatbot.ipynb`.
