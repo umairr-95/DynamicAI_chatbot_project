@@ -258,7 +258,11 @@ def render_chat_dashboard():
         st.session_state.interaction_log = []
 
     if not GEMINI_API_KEY:
-        st.warning("Add a Gemini API key to enable chat.")
+        st.warning("GEMINI_API_KEY is not available to this app.")
+        st.info(
+            "For Streamlit Cloud, add the key in this app's Settings → Secrets. "
+            "The local .streamlit/secrets.toml file is not uploaded automatically."
+        )
         with st.expander("Set up Gemini"):
             st.markdown(
                 "[Get a Gemini API key](https://aistudio.google.com/apikey)"
@@ -268,6 +272,7 @@ def render_chat_dashboard():
                 'GEMINI_MODEL = "gemini-3.8-flash"',
                 language="toml"
             )
+            st.caption("Keep the key private; do not commit it to Git.")
 
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):

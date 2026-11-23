@@ -124,7 +124,9 @@ GEMINI_MODEL = "gemini-3.8-flash"
 ```
 
 The app sends chat requests directly to Google Gemini; no local model server is
-required. Keep the API key in Streamlit Secrets and never commit it.
+required. The local `.streamlit/secrets.toml` file is gitignored and is not
+uploaded with the repository; configure the key separately in the deployed
+app's **Settings → Secrets**. Keep the API key private and never commit it.
 
 ### Notebook
 
