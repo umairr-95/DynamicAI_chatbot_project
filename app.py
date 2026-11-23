@@ -768,25 +768,42 @@ else:
 
 
 
-from pathlib import Path
-import joblib
-import streamlit as st
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-MODEL_PATH = (
-    PROJECT_ROOT
-    / "models"
-    / "nlp"
-    / "intent_logistic_regression.pkl"
-)
 
 @st.cache_resource
-def load_model():
+def load_intent_model():
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
-            f"Model not found: {MODEL_PATH}"
+            f"Intent model not found: {MODEL_PATH}"
         )
     return joblib.load(MODEL_PATH)
 
-intent_model = load_model()
+try:
+    intent_model = load_intent_model()
+    model_loaded = True
+except Exception as error:
+    model_loaded = False
+    st.error(f"Could not load the NLP model: {error}")
+
+
+# from pathlib import Path
+# import joblib
+# import streamlit as st
+
+# PROJECT_ROOT = Path(__file__).resolve().parent
+
+# MODEL_PATH = (
+#     PROJECT_ROOT
+#     / "models"
+#     / "nlp"
+#     / "intent_logistic_regression.pkl"
+# )
+
+# @st.cache_resource
+# def load_model():
+#     if not MODEL_PATH.exists():
+#         raise FileNotFoundError(
+#             f"Model not found: {MODEL_PATH}"
+#         )
+#     return joblib.load(MODEL_PATH)
+
+# intent_model = load_model()
