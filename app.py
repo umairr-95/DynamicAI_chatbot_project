@@ -11,7 +11,6 @@ from urllib.request import Request, urlopen
 import joblib
 import pandas as pd
 import streamlit as st
-from streamlit.errors import StreamlitSecretNotFoundError
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --------------------------------------------------
@@ -25,7 +24,7 @@ st.set_page_config(
 )
 
 st.title("🤖 Dynamic AI Chatbot")
-st.caption("AI-powered chat using OpenAI. Your messages are sent to OpenAI to generate responses.")
+st.caption("Open-ended chat runs on a local Ollama model. Weather lookups use an online service.")
 
 # --------------------------------------------------
 # 2. PROJECT PATHS AND MODEL LOADING
@@ -148,43 +147,9 @@ RESPONSE_TEMPLATES = {
     "request_human": "You would like to speak with a human representative. This demo cannot transfer you to a live agent."
 }
 
-DEMO_INTENT_PATTERNS = [
-    ("greeting", r"\b(?:hello|hi|hey|hiya|greetings|good morning|good afternoon|good evening)\b"),
-    ("goodbye", r"\b(?:bye|goodbye|farewell|see you|take care)\b"),
-    ("thanks", r"\b(?:thank you|thanks|appreciate|grateful)\b"),
-    ("bot_identity", r"\b(?:who are you|what are you|are you an? (?:ai|chatbot|bot)|your identity)\b"),
-    ("faq_hours", r"\b(?:hours|open|close|available today|business hours)\b"),
-    ("faq_services", r"\b(?:services?|products?|offerings|what do you provide)\b"),
-    ("request_human", r"\b(?:human|real person|agent|representative)\b"),
-    ("request_support", r"\b(?:support|not working|cannot log in|can't log in|issue|problem)\b"),
-    ("complaint", r"\b(?:complaint|complain|unacceptable|dissatisfied|disappointing|bad experience)\b"),
-    ("positive_feedback", r"\b(?:excellent|great job|great service|wonderful experience|very useful)\b"),
-    ("negative_feedback", r"\b(?:terrible|poor service|not helpful|unhappy|not satisfied)\b"),
-    ("help", r"\b(?:what can you do|help|guide me|how does this work|your features)\b"),
-    ("feeling", r"\b(?:happy|excited|glad|wonderful)\b"),
-]
-
-DEMO_FALLBACK_RESPONSE = (
-    "This free demo has sample replies for greetings, FAQs, support, feedback, "
-    "and weather. Add an OpenAI API key in the sidebar for open-ended AI answers."
-)
-
 # --------------------------------------------------
 # 8. CHATBOT MESSAGE PROCESSING
 # --------------------------------------------------
-
-def get_openai_api_key():
-    api_key = (
-        os.environ.get("OPENAI_API_KEY")
-        or st.session_state.get("openai_api_key_input")
-    )
-    if not api_key:
-        try:
-            api_key = st.secrets["OPENAI_API_KEY"]
-        except (KeyError, StreamlitSecretNotFoundError):
-            api_key = None
-    return api_key
-
 
 def get_live_weather(location):
     try:
@@ -210,22 +175,16 @@ def get_live_weather(location):
         )
 
 
-def generate_ai_response(conversation_history):
-    api_key = get_openai_api_key()
-    if not api_key:
-        raise RuntimeError(
-            "Enter your OpenAI API key in the sidebar to enable AI-generated answers. "
-            "You can also configure OPENAI_API_KEY as an environment variable or "
-            "in .streamlit/secrets.toml."
-        )
-
+def generate_local_response(conversation_history):
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a helpful, conversational assistant. Answer the user's "
-                "question directly, use the conversation context, and be clear "
-                "when you are uncertain or cannot verify current information."
+                "You are the Dynamic AI Chatbot, a helpful and conversational "
+                "assistant. Answer the user's question directly using the "
+                "conversation context. Be clear when you are uncertain. You do "
+                "not have live web access unless the app provides a specific "
+                "lookup result."
             )
         }
     ]
@@ -236,43 +195,45 @@ def generate_ai_response(conversation_history):
         and isinstance(item.get("content"), str)
     )
 
+    model = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
     request = Request(
-        "https://api.openai.com/v1/chat/completions",
+        "http://127.0.0.1:11434/api/chat",
         data=json.dumps({
-            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            "model": model,
             "messages": messages,
-            "temperature": 0.7
+            "stream": False
         }).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        },
+        headers={"Content-Type": "application/json"},
         method="POST"
     )
 
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=180) as response:
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as error:
         raise RuntimeError(
-            f"OpenAI API request failed with HTTP {error.code}."
+            f"Local Ollama returned HTTP {error.code}. Make sure the model "
+            f"'{model}' is installed by running `ollama pull {model}`."
         ) from error
     except URLError as error:
         raise RuntimeError(
-            f"Could not reach the OpenAI API: {error.reason}"
+            "Could not reach Ollama on this computer. Install and start Ollama, "
+            f"then download the model with `ollama pull {model}`."
         ) from error
     except TimeoutError as error:
-        raise RuntimeError("The OpenAI API request timed out. Please try again.") from error
+        raise RuntimeError(
+            "The local model took too long to respond. Try again or use a smaller model."
+        ) from error
     except json.JSONDecodeError as error:
-        raise RuntimeError("The OpenAI API returned invalid JSON.") from error
+        raise RuntimeError("Ollama returned invalid JSON.") from error
 
     try:
-        answer = result["choices"][0]["message"]["content"].strip()
+        answer = result["message"]["content"].strip()
     except (KeyError, IndexError, TypeError, AttributeError) as error:
-        raise RuntimeError("The OpenAI API returned an invalid response.") from error
+        raise RuntimeError("Ollama returned an invalid response.") from error
 
     if not answer:
-        raise RuntimeError("The AI returned an empty response. Please try again.")
+        raise RuntimeError("The local model returned an empty response. Please try again.")
     return answer
 
 
@@ -320,8 +281,21 @@ def process_message(message, conversation_history=None):
         weather_handled = True
 
     if not weather_handled:
-        api_key = get_openai_api_key()
-        if api_key:
+        image_match = re.search(
+            r"\b(?:images?|photos?|pictures?)\s+(?:of|for)\s+(.+)",
+            message,
+            flags=re.I
+        )
+        if image_match:
+            subject = image_match.group(1).strip(" ?!.")
+            intent = "image_search"
+            confidence = 1.0
+            image_search_url = (
+                "https://commons.wikimedia.org/wiki/Special:MediaSearch"
+                f"?type=image&search={quote(subject)}"
+            )
+            response = f"[Browse images of {subject}]({image_search_url})"
+        else:
             if clean_message:
                 probabilities = intent_model.predict_proba([clean_message])[0]
                 predicted_index = probabilities.argmax()
@@ -330,17 +304,9 @@ def process_message(message, conversation_history=None):
             else:
                 intent = "general_question"
                 confidence = 0.0
-            response = generate_ai_response(
+            response = generate_local_response(
                 conversation_history or [{"role": "user", "content": message}]
             )
-        else:
-            intent, response = "offline_demo", DEMO_FALLBACK_RESPONSE
-            for demo_intent, pattern in DEMO_INTENT_PATTERNS:
-                if re.search(pattern, clean_message):
-                    intent = demo_intent
-                    response = RESPONSE_TEMPLATES[demo_intent]
-                    break
-            confidence = 1.0 if intent != "offline_demo" else 0.0
 
     sentiment, sentiment_score = analyze_sentiment(message)
     emotion = detect_emotion(message)
@@ -375,21 +341,15 @@ if model_loaded:
         st.session_state.pending_weather = False
 
     with st.sidebar:
-        st.subheader("AI configuration")
-        st.text_input(
-            "OpenAI API key",
-            type="password",
-            key="openai_api_key_input",
-            help="Used to generate replies. Do not share your key in chat."
+        st.subheader("Local AI setup")
+        st.markdown("[Install Ollama](https://ollama.com/download)")
+        st.caption("In PowerShell, download the local model once:")
+        st.code("ollama pull qwen2.5:3b", language="powershell")
+        st.caption(
+            "After installation and download, open-ended chat runs on this computer "
+            "without a cloud AI API or API key."
         )
-        if get_openai_api_key():
-            st.caption("AI replies are enabled. Chat messages are sent to OpenAI.")
-        else:
-            st.info("Free offline demo mode is active; try the sample prompts below.")
-            st.caption(
-                "Try: Hello, What can you do?, What are your services?, "
-                "What time do you open?, I need support, Thank you, Goodbye."
-            )
+        st.caption("Weather lookups and image search links require internet access.")
 
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):
