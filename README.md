@@ -107,10 +107,18 @@ computer running the app. The NLP model required by the interface is tracked at
 ### Streamlit Community Cloud
 
 Deploy the repository's `main` branch with `app.py` as the entry point.
-Community Cloud runs remotely and cannot access Ollama on your PC. The interface
-will load, but chat stays disabled until a hosted model backend is configured.
-Do not commit API keys; add them through the app's Streamlit Secrets settings
-when a hosted backend is selected.
+Community Cloud runs remotely and cannot access Ollama on your PC. To enable
+chat, create an [Ollama Cloud API key](https://ollama.com/settings/keys), then
+add the following in the app's **Settings → Secrets**:
+
+```toml
+OLLAMA_API_KEY = "your_api_key"
+OLLAMA_MODEL = "glm-5.3-flash"
+```
+
+The app then calls `https://ollama.com/api` directly; local runs still use
+`http://127.0.0.1:11434` by default. Keep the API key in Streamlit Secrets and
+never commit it. Cloud API usage may consume your Ollama account quota or credits.
 
 ### Notebook
 

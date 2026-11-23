@@ -8,12 +8,13 @@ import shutil
 import subprocess
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 import joblib
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --------------------------------------------------
@@ -35,8 +36,45 @@ st.caption("A local-first conversation workspace with live session insights.")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = PROJECT_ROOT / "models" / "nlp" / "intent_logistic_regression.pkl"
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
-OLLAMA_API_URL = "http://127.0.0.1:11434"
+
+def get_app_setting(name, default=""):
+    value = os.environ.get(name)
+    if value is not None:
+        return value
+
+    try:
+        return st.secrets.get(name, default)
+    except StreamlitSecretNotFoundError:
+        return default
+
+
+OLLAMA_API_KEY = get_app_setting("OLLAMA_API_KEY").strip()
+OLLAMA_API_URL = get_app_setting(
+    "OLLAMA_API_URL",
+    "https://ollama.com/api" if OLLAMA_API_KEY else "http://127.0.0.1:11434"
+).rstrip("/")
+OLLAMA_MODEL = get_app_setting(
+    "OLLAMA_MODEL",
+    "glm-5.3-flash" if OLLAMA_API_KEY else "qwen2.5:3b"
+)
+
+
+def uses_local_ollama():
+    return urlparse(OLLAMA_API_URL).hostname in {"127.0.0.1", "localhost", "::1"}
+
+
+def ollama_headers():
+    if OLLAMA_API_KEY:
+        return {"Authorization": f"Bearer {OLLAMA_API_KEY}"}
+    return {}
+
+
+def ollama_endpoint(path):
+    base_url = OLLAMA_API_URL.rstrip("/")
+    if urlparse(base_url).path.rstrip("/").endswith("/api"):
+        return f"{base_url}/{path.lstrip('/')}"
+    return f"{base_url}/api/{path.lstrip('/')}"
+
 
 @st.cache_resource
 def load_intent_model():
@@ -182,14 +220,25 @@ def get_live_weather(location):
 
 def get_local_model_status():
     def fetch_models():
-        with urlopen(f"{OLLAMA_API_URL}/api/tags", timeout=2) as response:
+        request = Request(
+            ollama_endpoint("tags"),
+            headers=ollama_headers()
+        )
+        with urlopen(request, timeout=5) as response:
             return json.loads(response.read().decode("utf-8"))
+
+    if urlparse(OLLAMA_API_URL).hostname == "ollama.com" and not OLLAMA_API_KEY:
+        return False, "Set OLLAMA_API_KEY in Streamlit Secrets"
 
     try:
         result = fetch_models()
-    except HTTPError:
-        return False, "Ollama is not responding"
+    except HTTPError as error:
+        if error.code in {401, 403}:
+            return False, "Ollama Cloud authentication failed · Check OLLAMA_API_KEY"
+        return False, f"Ollama API returned HTTP {error.code}"
     except URLError:
+        if not uses_local_ollama():
+            return False, "Could not reach the configured hosted Ollama API"
         start_error = start_local_ollama_server()
         if start_error:
             return False, start_error
@@ -199,8 +248,10 @@ def get_local_model_status():
             return False, start_error
         try:
             result = fetch_models()
-        except HTTPError:
-            return False, "Ollama is not responding"
+        except HTTPError as error:
+            if error.code in {401, 403}:
+                return False, "Ollama Cloud authentication failed · Check OLLAMA_API_KEY"
+            return False, f"Ollama API returned HTTP {error.code}"
         except URLError:
             return False, "Ollama did not start · Run `ollama serve` and retry"
         except TimeoutError:
@@ -269,7 +320,11 @@ def wait_for_local_ollama_server():
     deadline = time.monotonic() + 10
     while True:
         try:
-            with urlopen(f"{OLLAMA_API_URL}/api/tags", timeout=2):
+            request = Request(
+                ollama_endpoint("tags"),
+                headers=ollama_headers()
+            )
+            with urlopen(request, timeout=2):
                 return None
         except HTTPError:
             return "Ollama is not responding"
@@ -312,13 +367,16 @@ def generate_local_response(conversation_history):
     )
 
     request = Request(
-        f"{OLLAMA_API_URL}/api/chat",
+        ollama_endpoint("chat"),
         data=json.dumps({
             "model": OLLAMA_MODEL,
             "messages": messages,
             "stream": False
         }).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            **ollama_headers()
+        },
         method="POST"
     )
 
@@ -329,11 +387,21 @@ def generate_local_response(conversation_history):
     try:
         result = send_request()
     except HTTPError as error:
+        if error.code in {401, 403}:
+            raise RuntimeError(
+                "Ollama Cloud authentication failed. Check OLLAMA_API_KEY in "
+                "Streamlit Secrets."
+            ) from error
         raise RuntimeError(
-            f"Local Ollama returned HTTP {error.code}. Make sure the model "
-            f"'{OLLAMA_MODEL}' is installed by running `ollama pull {OLLAMA_MODEL}`."
+            f"Ollama returned HTTP {error.code}. Check that model "
+            f"'{OLLAMA_MODEL}' is available."
         ) from error
     except URLError as error:
+        if not uses_local_ollama():
+            raise RuntimeError(
+                "Could not reach the configured hosted Ollama API. Check "
+                "OLLAMA_API_URL and the deployment's network access."
+            ) from error
         start_error = start_local_ollama_server()
         if not start_error:
             start_error = wait_for_local_ollama_server()
@@ -343,10 +411,14 @@ def generate_local_response(conversation_history):
         try:
             result = send_request()
         except HTTPError as retry_error:
+            if retry_error.code in {401, 403}:
+                raise RuntimeError(
+                    "Ollama Cloud authentication failed. Check OLLAMA_API_KEY "
+                    "in Streamlit Secrets."
+                ) from retry_error
             raise RuntimeError(
-                f"Local Ollama returned HTTP {retry_error.code}. Make sure the "
-                f"model '{OLLAMA_MODEL}' is installed by running "
-                f"`ollama pull {OLLAMA_MODEL}`."
+                f"Ollama returned HTTP {retry_error.code}. Check that model "
+                f"'{OLLAMA_MODEL}' is available."
             ) from retry_error
         except URLError as retry_error:
             raise RuntimeError(
@@ -486,15 +558,31 @@ if model_loaded:
             icon=":material/computer:",
             color="green" if model_ready else "orange"
         )
-        st.caption(
-            "Chat uses Ollama on the app's computer. Streamlit Cloud cannot "
-            "reach Ollama running on your PC."
-        )
+        if uses_local_ollama():
+            st.caption(
+                "Local Ollama is the default. Streamlit Cloud cannot reach "
+                "Ollama running on your PC."
+            )
+        else:
+            st.caption("Chat requests are sent to the configured hosted Ollama API.")
         if not model_ready:
             st.info(
-                "Chat is disabled until the configured Ollama model is reachable. "
-                "Cloud chat needs a hosted model backend."
+                "Chat is disabled until the configured Ollama model is reachable."
             )
+            with st.expander("Enable chat on Streamlit Cloud", icon=":material/cloud:"):
+                st.markdown(
+                    "[Create an Ollama API key](https://ollama.com/settings/keys)"
+                )
+                st.caption("Add these values under the app's Settings → Secrets:")
+                st.code(
+                    'OLLAMA_API_KEY = "your_api_key"\n'
+                    'OLLAMA_MODEL = "glm-5.3-flash"',
+                    language="toml"
+                )
+                st.caption(
+                    "The app connects to Ollama Cloud automatically. Keep the "
+                    "API key in Secrets; do not commit it."
+                )
             with st.expander("Set up local Ollama", icon=":material/settings:"):
                 st.markdown("[Install Ollama](https://ollama.com/download)")
                 st.caption("On the computer running this app, download the model:")
@@ -597,10 +685,16 @@ if model_loaded:
 
         with st.container(border=True):
             st.subheader("About this chat", icon=":material/info:")
-            st.write(
-                f"Open-ended replies use the local `{OLLAMA_MODEL}` model. "
-                "Your chat is not sent to a cloud AI provider."
-            )
+            if uses_local_ollama():
+                st.write(
+                    f"Open-ended replies use the local `{OLLAMA_MODEL}` model. "
+                    "Your chat is not sent to a cloud AI provider."
+                )
+            else:
+                st.write(
+                    f"Open-ended replies use Ollama Cloud's `{OLLAMA_MODEL}` "
+                    "model. Your messages are sent to Ollama Cloud for inference."
+                )
             st.caption("Live weather and image browsing use internet services.")
 
     user_message = st.chat_input("Ask anything...", disabled=not model_ready)
