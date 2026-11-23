@@ -105,7 +105,7 @@ before starting the app, or add it to `.streamlit/secrets.toml`:
 
 ```toml
 GEMINI_API_KEY = "your_api_key"
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 ```
 
 Get an API key from [Google AI Studio](https://aistudio.google.com/apikey).
@@ -120,7 +120,7 @@ then add it in the app's **Settings → Secrets**:
 
 ```toml
 GEMINI_API_KEY = "your_api_key"
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-3.8-flash"
 ```
 
 The app sends chat requests directly to Google Gemini; no local model server is

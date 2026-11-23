@@ -1,11 +1,15 @@
 
 from pathlib import Path
 from datetime import datetime
+import os
 import re
 
+from google import genai
+from google.genai import types
 import joblib
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 # --------------------------------------------------
@@ -19,7 +23,7 @@ st.set_page_config(
 )
 
 st.title("🤖 Dynamic AI Chatbot")
-st.caption("An NLP-powered conversational chatbot")
+st.caption("Ask questions and get conversational answers from Gemini.")
 
 # --------------------------------------------------
 # 2. PROJECT PATHS AND MODEL LOADING
@@ -27,6 +31,25 @@ st.caption("An NLP-powered conversational chatbot")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = PROJECT_ROOT / "models" / "nlp" / "intent_logistic_regression.pkl"
+
+
+def get_app_setting(name, default=""):
+    value = os.environ.get(name)
+    if value is not None:
+        return value
+
+    try:
+        return st.secrets.get(name, default)
+    except StreamlitSecretNotFoundError:
+        return default
+
+
+GEMINI_API_KEY = get_app_setting("GEMINI_API_KEY").strip()
+GEMINI_MODEL = (
+    get_app_setting("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    or "gemini-3.8-flash"
+)
+
 
 @st.cache_resource
 def load_intent_model():
@@ -38,10 +61,12 @@ def load_intent_model():
 
 try:
     intent_model = load_intent_model()
-    model_loaded = True
 except Exception as error:
-    model_loaded = False
-    st.error(f"Could not load the NLP model: {error}")
+    intent_model = None
+    st.warning(
+        "The intent analysis model could not load; Gemini chat is still "
+        f"available. Details: {error}"
+    )
 
 sentiment_analyzer = SentimentIntensityAnalyzer()
 
@@ -118,29 +143,64 @@ def extract_entities(message):
     return entities
 
 # --------------------------------------------------
-# 7. RESPONSE TEMPLATES
-# --------------------------------------------------
-
-RESPONSE_TEMPLATES = {
-    "greeting": "Hello! Welcome to the Dynamic AI Chatbot. How can I help you?",
-    "goodbye": "Goodbye! Thank you for chatting with me.",
-    "thanks": "You're welcome! I'm happy to help.",
-    "bot_identity": "I am a Python-based AI chatbot that uses NLP intent recognition.",
-    "help": "I can respond to greetings, FAQs, support requests, complaints, and feedback.",
-    "faq_hours": "Our sample business hours are Monday to Saturday, 9 AM to 6 PM. Please confirm these hours for your actual service.",
-    "faq_services": "I can help with general enquiries, customer support, complaints, and service information.",
-    "request_support": "I can help with your support request. Please describe the issue.",
-    "complaint": "I'm sorry you're experiencing this issue. Please share more details so I can understand your concern.",
-    "positive_feedback": "Thank you for your positive feedback. We appreciate it!",
-    "negative_feedback": "I'm sorry the experience wasn't satisfactory. Your feedback is valuable.",
-    "request_human": "You would like to speak with a human representative. This demo cannot transfer you to a live agent."
-}
-
-# --------------------------------------------------
 # 8. CHATBOT MESSAGE PROCESSING
 # --------------------------------------------------
 
-def process_message(message, threshold=0.45):
+def generate_gemini_response(conversation_history):
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            "Gemini is not configured. Add GEMINI_API_KEY to Streamlit Secrets."
+        )
+
+    contents = []
+    for item in conversation_history[-20:]:
+        if not isinstance(item, dict):
+            continue
+        role = item.get("role")
+        content = item.get("content")
+        if role in {"user", "assistant"} and isinstance(content, str):
+            contents.append(types.Content(
+                role="user" if role == "user" else "model",
+                parts=[types.Part.from_text(text=content)]
+            ))
+
+    if contents and contents[0].role == "model":
+        contents.pop(0)
+    if not contents:
+        raise RuntimeError("There is no user question to send to Gemini.")
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    try:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=(
+                    "You are a helpful chatbot. Answer the user's question "
+                    "directly and clearly. If you are unsure, say so."
+                ),
+                temperature=0.7,
+                max_output_tokens=1024
+            )
+        )
+    except genai.errors.APIError as error:
+        if error.code in {401, 403}:
+            message = "Gemini rejected the API key. Check GEMINI_API_KEY."
+        elif error.code == 429:
+            message = "Gemini's request limit was reached. Please try again later."
+        else:
+            message = f"Gemini API error ({error.code}): {error.message}"
+        raise RuntimeError(message) from error
+
+    answer = response.text
+    if not isinstance(answer, str) or not answer.strip():
+        raise RuntimeError(
+            "Gemini returned an empty answer. Please rephrase your question."
+        )
+    return answer.strip()
+
+
+def process_message(message, conversation_history=None, threshold=0.45):
     clean_message = preprocess_text(message)
 
     if not clean_message:
@@ -153,23 +213,20 @@ def process_message(message, threshold=0.45):
             "entities": {}
         }
 
-    probabilities = intent_model.predict_proba([clean_message])[0]
-    predicted_index = probabilities.argmax()
-
-    intent = str(intent_model.classes_[predicted_index])
-    confidence = float(probabilities[predicted_index])
-
-    if confidence < threshold:
-        response = (
-            "I'm not completely sure I understood. "
-            "Could you please rephrase your question?"
-        )
-        intent = "fallback"
+    if intent_model is not None:
+        probabilities = intent_model.predict_proba([clean_message])[0]
+        predicted_index = probabilities.argmax()
+        intent = str(intent_model.classes_[predicted_index])
+        confidence = float(probabilities[predicted_index])
+        if confidence < threshold:
+            intent = "general_question"
     else:
-        response = RESPONSE_TEMPLATES.get(
-            intent,
-            "I understand your message, but I don't have a response for it yet."
-        )
+        intent = "general_question"
+        confidence = 0.0
+
+    response = generate_gemini_response(
+        conversation_history or [{"role": "user", "content": message}]
+    )
 
     sentiment, sentiment_score = analyze_sentiment(message)
     emotion = detect_emotion(message)
@@ -192,13 +249,25 @@ def process_message(message, threshold=0.45):
 # 9. CHAT INTERFACE
 # --------------------------------------------------
 
-if model_loaded:
+def render_chat_dashboard():
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
     if "interaction_log" not in st.session_state:
         st.session_state.interaction_log = []
+
+    if not GEMINI_API_KEY:
+        st.warning("Add a Gemini API key to enable chat.")
+        with st.expander("Set up Gemini"):
+            st.markdown(
+                "[Get a Gemini API key](https://aistudio.google.com/apikey)"
+            )
+            st.code(
+                'GEMINI_API_KEY = "your_api_key"\n'
+                'GEMINI_MODEL = "gemini-3.8-flash"',
+                language="toml"
+            )
 
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):
@@ -208,7 +277,10 @@ if model_loaded:
                 with st.expander("Message analysis"):
                     st.write(item["details"])
 
-    user_message = st.chat_input("Type your message here...")
+    user_message = st.chat_input(
+        "Type your message here...",
+        disabled=not bool(GEMINI_API_KEY)
+    )
 
     if user_message:
         st.session_state.messages.append({
@@ -219,33 +291,40 @@ if model_loaded:
         with st.chat_message("user"):
             st.markdown(user_message)
 
-        result = process_message(user_message)
+        try:
+            result = process_message(
+                user_message,
+                conversation_history=st.session_state.messages
+            )
+        except RuntimeError as error:
+            st.session_state.messages.pop()
+            st.error(str(error))
+        else:
+            details = {
+                "Intent": result["intent"],
+                "Confidence": round(result["confidence"], 3),
+                "Sentiment": result["sentiment"],
+                "Emotion": result["emotion"],
+                "Entities": result["entities"]
+            }
 
-        details = {
-            "Intent": result["intent"],
-            "Confidence": round(result["confidence"], 3),
-            "Sentiment": result["sentiment"],
-            "Emotion": result["emotion"],
-            "Entities": result["entities"]
-        }
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result["response"],
+                "details": details
+            })
 
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": result["response"],
-            "details": details
-        })
+            st.session_state.interaction_log.append({
+                "timestamp": datetime.now().isoformat(),
+                "message": user_message,
+                "response": result["response"],
+                "intent": result["intent"],
+                "confidence": result["confidence"],
+                "sentiment": result["sentiment"],
+                "emotion": result["emotion"]
+            })
 
-        st.session_state.interaction_log.append({
-            "timestamp": datetime.now().isoformat(),
-            "message": user_message,
-            "response": result["response"],
-            "intent": result["intent"],
-            "confidence": result["confidence"],
-            "sentiment": result["sentiment"],
-            "emotion": result["emotion"]
-        })
-
-        st.rerun()
+            st.rerun()
 
     if st.button("Clear conversation"):
         st.session_state.messages = []
@@ -262,7 +341,7 @@ if model_loaded:
             analytics_df = pd.DataFrame(
                 st.session_state.interaction_log
             )
-            st.dataframe(analytics_df, use_container_width=True)
+            st.dataframe(analytics_df, width="stretch")
 
             csv_data = analytics_df.to_csv(index=False).encode("utf-8")
 
@@ -273,31 +352,4 @@ if model_loaded:
                 mime="text/csv"
             )
 
-else:
-    st.warning("The chatbot cannot start until its NLP model loads successfully.")
-
-
-# model loading section
-
-from pathlib import Path
-import joblib
-import streamlit as st
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-MODEL_PATH = (
-    PROJECT_ROOT
-    / "models"
-    / "nlp"
-    / "intent_logistic_regression.pkl"
-)
-
-@st.cache_resource
-def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"Model not found: {MODEL_PATH}"
-        )
-    return joblib.load(MODEL_PATH)
-
-intent_model = load_model()
+render_chat_dashboard()
