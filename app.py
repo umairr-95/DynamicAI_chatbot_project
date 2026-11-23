@@ -18,13 +18,13 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 # --------------------------------------------------
 
 st.set_page_config(
-    page_title="Dynamic AI Chatbot",
-    page_icon="🤖",
-    layout="centered"
+    page_title="Dynamic AI | Chat workspace",
+    page_icon=":material/smart_toy:",
+    layout="wide"
 )
 
-st.title("🤖 Dynamic AI Chatbot")
-st.caption("Open-ended chat runs on a local Ollama model. Weather lookups use an online service.")
+st.title("Dynamic AI", icon=":material/smart_toy:")
+st.caption("A local-first conversation workspace with live session insights.")
 
 # --------------------------------------------------
 # 2. PROJECT PATHS AND MODEL LOADING
@@ -341,25 +341,112 @@ if model_loaded:
         st.session_state.pending_weather = False
 
     with st.sidebar:
-        st.subheader("Local AI setup")
-        st.markdown("[Install Ollama](https://ollama.com/download)")
-        st.caption("In PowerShell, download the local model once:")
-        st.code("ollama pull qwen2.5:3b", language="powershell")
-        st.caption(
-            "After installation and download, open-ended chat runs on this computer "
-            "without a cloud AI API or API key."
-        )
-        st.caption("Weather lookups and image search links require internet access.")
+        st.subheader("Workspace")
+        st.badge("Local AI", icon=":material/computer:", color="green")
+        st.caption("Chat replies run through Ollama on this computer.")
+        with st.expander("Set up local AI", icon=":material/settings:"):
+            st.markdown("[Install Ollama](https://ollama.com/download)")
+            st.caption("Download the model once from PowerShell:")
+            st.code("ollama pull qwen2.5:3b", language="powershell")
+        st.caption("Weather and image search links need internet access.")
+        if st.button(
+            "Clear conversation",
+            icon=":material/delete_sweep:",
+            width="stretch"
+        ):
+            st.session_state.messages = []
+            st.session_state.interaction_log = []
+            st.session_state.pending_weather = False
+            st.rerun()
 
-    for item in st.session_state.messages:
-        with st.chat_message(item["role"]):
-            st.markdown(item["content"])
+    interaction_log = st.session_state.interaction_log
+    intent_counts = (
+        pd.Series([item["intent"] for item in interaction_log])
+        .value_counts()
+        if interaction_log
+        else pd.Series(dtype="int64")
+    )
+    top_intent = (
+        intent_counts.index[0].replace("_", " ").title()
+        if not intent_counts.empty
+        else "—"
+    )
+    latest_emotion = (
+        interaction_log[-1]["emotion"].title()
+        if interaction_log
+        else "—"
+    )
 
-            if item["role"] == "assistant" and "details" in item:
-                with st.expander("Message analysis"):
-                    st.write(item["details"])
+    with st.container(horizontal=True):
+        st.metric("Exchanges", len(interaction_log), border=True)
+        st.metric("Most common intent", top_intent, border=True)
+        st.metric("Latest emotion", latest_emotion, border=True)
 
-    user_message = st.chat_input("Type your message here...")
+    chat_column, insights_column = st.columns([1.8, 1], gap="large")
+    selected_prompt = None
+
+    with chat_column:
+        with st.container(border=True):
+            st.subheader("Conversation", icon=":material/chat:")
+            if st.session_state.messages:
+                for item in st.session_state.messages:
+                    avatar = (
+                        ":material/person:"
+                        if item["role"] == "user"
+                        else ":material/smart_toy:"
+                    )
+                    with st.chat_message(item["role"], avatar=avatar):
+                        st.markdown(item["content"])
+
+                        if item["role"] == "assistant" and "details" in item:
+                            with st.expander(
+                                "Message analysis",
+                                icon=":material/insights:"
+                            ):
+                                st.write(item["details"])
+            else:
+                st.info(
+                    "Start with a question or choose a suggested prompt.",
+                    icon=":material/waving_hand:"
+                )
+                selected_prompt = st.pills(
+                    "Try asking",
+                    [
+                        "How does local AI work?",
+                        "What can you help me with?",
+                        "Tell me a fun fact"
+                    ],
+                    label_visibility="collapsed",
+                    key="starter_prompts"
+                )
+
+    with insights_column:
+        with st.container(border=True):
+            st.subheader("Conversation insights", icon=":material/insights:")
+            if interaction_log:
+                st.bar_chart(
+                    intent_counts,
+                    horizontal=True,
+                    alt="Conversation exchanges by detected intent"
+                )
+                st.caption(
+                    f"Latest sentiment: {interaction_log[-1]['sentiment']} · "
+                    f"Latest emotion: {interaction_log[-1]['emotion']}"
+                )
+            else:
+                st.caption("Insights appear here after your first exchange.")
+
+        with st.container(border=True):
+            st.subheader("About this chat", icon=":material/info:")
+            st.write(
+                "Open-ended replies use the local `qwen2.5:3b` model. "
+                "Your chat is not sent to a cloud AI provider."
+            )
+            st.caption("Live weather and image browsing use internet services.")
+
+    user_message = st.chat_input("Ask anything...")
+    if selected_prompt:
+        user_message = selected_prompt
 
     if user_message:
         st.session_state.messages.append({
@@ -405,31 +492,26 @@ if model_loaded:
 
             st.rerun()
 
-    if st.button("Clear conversation"):
-        st.session_state.messages = []
-        st.session_state.interaction_log = []
-        st.rerun()
-
-    with st.expander("Chatbot analytics for this session"):
-        st.metric(
-            "Messages in this session",
-            len(st.session_state.interaction_log)
-        )
-
-        if st.session_state.interaction_log:
-            analytics_df = pd.DataFrame(
-                st.session_state.interaction_log
+    with st.expander("Session report", icon=":material/table_chart:"):
+        if interaction_log:
+            analytics_df = pd.DataFrame(interaction_log)
+            st.dataframe(
+                analytics_df,
+                hide_index=True,
+                alt="Current session conversation analytics"
             )
-            st.dataframe(analytics_df, use_container_width=True)
 
             csv_data = analytics_df.to_csv(index=False).encode("utf-8")
-
             st.download_button(
                 "Download conversation report",
                 data=csv_data,
                 file_name="chatbot_session_report.csv",
-                mime="text/csv"
+                mime="text/csv",
+                icon=":material/download:",
+                width="stretch"
             )
+        else:
+            st.caption("The session report will appear after your first exchange.")
 
 else:
     st.warning("The chatbot cannot start until its NLP model loads successfully.")
