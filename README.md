@@ -100,25 +100,31 @@ The Streamlit interface is in `app.py`. Install `requirements.txt`, then run:
 streamlit run app.py
 ```
 
-Chat replies use the configured Ollama model (default: `qwen2.5:3b`) on the
-computer running the app. The NLP model required by the interface is tracked at
+Chat replies use Google Gemini. For local development, set `GEMINI_API_KEY`
+before starting the app, or add it to `.streamlit/secrets.toml`:
+
+```toml
+GEMINI_API_KEY = "your_api_key"
+GEMINI_MODEL = "gemini-2.5-flash"
+```
+
+Get an API key from [Google AI Studio](https://aistudio.google.com/apikey).
+The intent model used for conversation insights is tracked at
 `models/nlp/intent_logistic_regression.pkl`.
 
 ### Streamlit Community Cloud
 
 Deploy the repository's `main` branch with `app.py` as the entry point.
-Community Cloud runs remotely and cannot access Ollama on your PC. To enable
-chat, create an [Ollama Cloud API key](https://ollama.com/settings/keys), then
-add the following in the app's **Settings → Secrets**:
+To enable chat, create a [Gemini API key](https://aistudio.google.com/apikey),
+then add it in the app's **Settings → Secrets**:
 
 ```toml
-OLLAMA_API_KEY = "your_api_key"
-OLLAMA_MODEL = "glm-5.3-flash"
+GEMINI_API_KEY = "your_api_key"
+GEMINI_MODEL = "gemini-2.5-flash"
 ```
 
-The app then calls `https://ollama.com/api` directly; local runs still use
-`http://127.0.0.1:11434` by default. Keep the API key in Streamlit Secrets and
-never commit it. Cloud API usage may consume your Ollama account quota or credits.
+The app sends chat requests directly to Google Gemini; no local model server is
+required. Keep the API key in Streamlit Secrets and never commit it.
 
 ### Notebook
 
