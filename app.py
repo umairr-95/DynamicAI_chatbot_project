@@ -4,6 +4,9 @@ from datetime import datetime
 import re
 import json
 import os
+import shutil
+import subprocess
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -32,6 +35,8 @@ st.caption("A local-first conversation workspace with live session insights.")
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 MODEL_PATH = PROJECT_ROOT / "models" / "nlp" / "intent_logistic_regression.pkl"
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+OLLAMA_API_URL = "http://127.0.0.1:11434"
 
 @st.cache_resource
 def load_intent_model():
@@ -176,14 +181,34 @@ def get_live_weather(location):
 
 
 def get_local_model_status():
-    model = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
+    def fetch_models():
+        with urlopen(f"{OLLAMA_API_URL}/api/tags", timeout=2) as response:
+            return json.loads(response.read().decode("utf-8"))
+
     try:
-        with urlopen("http://127.0.0.1:11434/api/tags", timeout=2) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        result = fetch_models()
     except HTTPError:
         return False, "Ollama is not responding"
     except URLError:
-        return False, "Ollama is not running"
+        start_error = start_local_ollama_server()
+        if start_error:
+            return False, start_error
+
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                result = fetch_models()
+                break
+            except HTTPError:
+                return False, "Ollama is not responding"
+            except URLError:
+                if time.monotonic() >= deadline:
+                    return False, "Ollama did not start · Run `ollama serve` and retry"
+                time.sleep(0.5)
+            except TimeoutError:
+                return False, "Ollama status check timed out"
+            except json.JSONDecodeError:
+                return False, "Ollama returned invalid status"
     except TimeoutError:
         return False, "Ollama status check timed out"
     except json.JSONDecodeError:
@@ -191,11 +216,55 @@ def get_local_model_status():
 
     models = result.get("models", []) if isinstance(result, dict) else []
     if any(
-        isinstance(item, dict) and item.get("name") == model
+        isinstance(item, dict) and item.get("name") == OLLAMA_MODEL
         for item in models
     ):
-        return True, f"Ready · {model}"
-    return False, f"Model not found · {model}"
+        return True, f"Ready · {OLLAMA_MODEL}"
+    return False, f"Model not found · {OLLAMA_MODEL}"
+
+
+@st.cache_resource
+def get_ollama_process_holder():
+    return {"process": None}
+
+
+def start_local_ollama_server():
+    executable = shutil.which("ollama")
+    if not executable and os.name == "nt":
+        local_app_data = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        installed_executable = local_app_data / "Programs" / "Ollama" / "ollama.exe"
+        if installed_executable.is_file():
+            executable = str(installed_executable)
+
+    if not executable:
+        return "Ollama is not running · Install Ollama, then run `ollama serve`"
+
+    process_holder = get_ollama_process_holder()
+    process = process_holder["process"]
+    if process is not None and process.poll() is None:
+        return None
+
+    process_options = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL
+    }
+    if os.name == "nt":
+        process_options["creationflags"] = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    else:
+        process_options["start_new_session"] = True
+
+    try:
+        process_holder["process"] = subprocess.Popen(
+            [executable, "serve"],
+            **process_options
+        )
+    except OSError as error:
+        return f"Could not start Ollama · {error}"
+    return None
 
 
 def generate_local_response(conversation_history):
@@ -218,11 +287,10 @@ def generate_local_response(conversation_history):
         and isinstance(item.get("content"), str)
     )
 
-    model = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
     request = Request(
-        "http://127.0.0.1:11434/api/chat",
+        f"{OLLAMA_API_URL}/api/chat",
         data=json.dumps({
-            "model": model,
+            "model": OLLAMA_MODEL,
             "messages": messages,
             "stream": False
         }).encode("utf-8"),
@@ -236,12 +304,12 @@ def generate_local_response(conversation_history):
     except HTTPError as error:
         raise RuntimeError(
             f"Local Ollama returned HTTP {error.code}. Make sure the model "
-            f"'{model}' is installed by running `ollama pull {model}`."
+            f"'{OLLAMA_MODEL}' is installed by running `ollama pull {OLLAMA_MODEL}`."
         ) from error
     except URLError as error:
         raise RuntimeError(
             "Could not reach Ollama on this computer. Install and start Ollama, "
-            f"then download the model with `ollama pull {model}`."
+            f"then download the model with `ollama pull {OLLAMA_MODEL}`."
         ) from error
     except TimeoutError as error:
         raise RuntimeError(
@@ -376,7 +444,7 @@ if model_loaded:
             with st.expander("Set up local AI", icon=":material/settings:"):
                 st.markdown("[Install Ollama](https://ollama.com/download)")
                 st.caption("Download the model once from PowerShell:")
-                st.code("ollama pull qwen2.5:3b", language="powershell")
+                st.code(f"ollama pull {OLLAMA_MODEL}", language="powershell")
         st.caption("Weather and image search links need internet access.")
         if st.button(
             "Clear conversation",
@@ -469,7 +537,7 @@ if model_loaded:
         with st.container(border=True):
             st.subheader("About this chat", icon=":material/info:")
             st.write(
-                "Open-ended replies use the local `qwen2.5:3b` model. "
+                f"Open-ended replies use the local `{OLLAMA_MODEL}` model. "
                 "Your chat is not sent to a cloud AI provider."
             )
             st.caption("Live weather and image browsing use internet services.")
