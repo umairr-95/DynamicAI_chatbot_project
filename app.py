@@ -49,6 +49,7 @@ GEMINI_MODEL = (
     get_app_setting("GEMINI_MODEL", "gemini-3.8-flash").strip()
     or "gemini-3.8-flash"
 )
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
 
 @st.cache_resource
@@ -59,14 +60,12 @@ def load_intent_model():
         )
     return joblib.load(MODEL_PATH)
 
+intent_model_error = None
 try:
     intent_model = load_intent_model()
 except Exception as error:
     intent_model = None
-    st.warning(
-        "The intent analysis model could not load; Gemini chat is still "
-        f"available. Details: {error}"
-    )
+    intent_model_error = str(error)
 
 sentiment_analyzer = SentimentIntensityAnalyzer()
 
@@ -146,6 +145,16 @@ def extract_entities(message):
 # 8. CHATBOT MESSAGE PROCESSING
 # --------------------------------------------------
 
+def format_gemini_error(error):
+    if error.code in {401, 403}:
+        return "Gemini rejected the API key. Check GEMINI_API_KEY in app secrets."
+    if error.code == 429:
+        return "Gemini's request limit was reached. Please try again later."
+    if error.code == 503:
+        return "Gemini is temporarily busy. Please wait a moment and try again."
+    return f"Gemini API error ({error.code}): {error.message}"
+
+
 def generate_gemini_response(conversation_history):
     if not GEMINI_API_KEY:
         raise RuntimeError(
@@ -170,34 +179,42 @@ def generate_gemini_response(conversation_history):
         raise RuntimeError("There is no user question to send to Gemini.")
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    try:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+    config = types.GenerateContentConfig(
+        system_instruction=(
+            "You are a helpful chatbot. Answer the user's question "
+            "directly and clearly. If you are unsure, say so."
+        ),
+        temperature=0.7,
+        max_output_tokens=1024
+    )
+
+    def request_model(model):
+        return client.models.generate_content(
+            model=model,
             contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=(
-                    "You are a helpful chatbot. Answer the user's question "
-                    "directly and clearly. If you are unsure, say so."
-                ),
-                temperature=0.7,
-                max_output_tokens=1024
-            )
+            config=config
         )
+
+    try:
+        response = request_model(GEMINI_MODEL)
+        model_used = GEMINI_MODEL
     except genai.errors.APIError as error:
-        if error.code in {401, 403}:
-            message = "Gemini rejected the API key. Check GEMINI_API_KEY."
-        elif error.code == 429:
-            message = "Gemini's request limit was reached. Please try again later."
-        else:
-            message = f"Gemini API error ({error.code}): {error.message}"
-        raise RuntimeError(message) from error
+        if error.code != 503 or GEMINI_MODEL == GEMINI_FALLBACK_MODEL:
+            raise RuntimeError(format_gemini_error(error)) from error
+        try:
+            response = request_model(GEMINI_FALLBACK_MODEL)
+            model_used = GEMINI_FALLBACK_MODEL
+        except genai.errors.APIError as fallback_error:
+            raise RuntimeError(
+                format_gemini_error(fallback_error)
+            ) from fallback_error
 
     answer = response.text
     if not isinstance(answer, str) or not answer.strip():
         raise RuntimeError(
             "Gemini returned an empty answer. Please rephrase your question."
         )
-    return answer.strip()
+    return answer.strip(), model_used
 
 
 def process_message(message, conversation_history=None, threshold=0.45):
@@ -224,7 +241,7 @@ def process_message(message, conversation_history=None, threshold=0.45):
         intent = "general_question"
         confidence = 0.0
 
-    response = generate_gemini_response(
+    response, response_model = generate_gemini_response(
         conversation_history or [{"role": "user", "content": message}]
     )
 
@@ -237,6 +254,7 @@ def process_message(message, conversation_history=None, threshold=0.45):
 
     return {
         "response": response,
+        "model": response_model,
         "intent": intent,
         "confidence": confidence,
         "sentiment": sentiment,
@@ -258,10 +276,9 @@ def render_chat_dashboard():
         st.session_state.interaction_log = []
 
     if not GEMINI_API_KEY:
-        st.warning("GEMINI_API_KEY is not available to this app.")
-        st.info(
-            "For Streamlit Cloud, add the key in this app's Settings → Secrets. "
-            "The local .streamlit/secrets.toml file is not uploaded automatically."
+        st.warning(
+            "Chat is disabled because this app cannot read GEMINI_API_KEY. "
+            "Add it under this app's Settings → Secrets."
         )
         with st.expander("Set up Gemini"):
             st.markdown(
@@ -273,6 +290,10 @@ def render_chat_dashboard():
                 language="toml"
             )
             st.caption("Keep the key private; do not commit it to Git.")
+
+    if intent_model_error:
+        with st.expander("Intent analytics unavailable"):
+            st.caption(intent_model_error)
 
     for item in st.session_state.messages:
         with st.chat_message(item["role"]):
@@ -303,9 +324,11 @@ def render_chat_dashboard():
             )
         except RuntimeError as error:
             st.session_state.messages.pop()
-            st.error(str(error))
+            with st.chat_message("assistant"):
+                st.write(str(error))
         else:
             details = {
+                "Model": result["model"],
                 "Intent": result["intent"],
                 "Confidence": round(result["confidence"], 3),
                 "Sentiment": result["sentiment"],
@@ -323,6 +346,7 @@ def render_chat_dashboard():
                 "timestamp": datetime.now().isoformat(),
                 "message": user_message,
                 "response": result["response"],
+                "model": result["model"],
                 "intent": result["intent"],
                 "confidence": result["confidence"],
                 "sentiment": result["sentiment"],

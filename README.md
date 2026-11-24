@@ -127,6 +127,8 @@ The app sends chat requests directly to Google Gemini; no local model server is
 required. The local `.streamlit/secrets.toml` file is gitignored and is not
 uploaded with the repository; configure the key separately in the deployed
 app's **Settings → Secrets**. Keep the API key private and never commit it.
+If the configured model returns HTTP 503, the app automatically tries
+`gemini-3.5-flash-lite` once before showing a retry message.
 
 ### Notebook
 
